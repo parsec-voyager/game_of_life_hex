@@ -165,13 +165,8 @@ stepButton.addEventListener("click", () => {
     step();
 });
 
-// Reset to the starting shape, pausing the game first if it is running
-resetButton.addEventListener("click", () => {
-    if (timer !== null) {
-        stopRunning();
-    }
-    resetGrid();
-});
+// Reset to the starting shape. Like Clear, this leaves the game running.
+resetButton.addEventListener("click", resetGrid);
 
 speedValue.textContent = speedSlider.value;
 
