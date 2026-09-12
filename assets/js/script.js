@@ -1,8 +1,8 @@
 // Grid size. Even rows hold WIDTH cells; odd rows hold one fewer and are
 // shifted right by half a cell, which makes the grid hexagonal: each cell
 // touches two cells above, two below and one either side.
-const WIDTH = 99;
-const HEIGHT = 101;
+const WIDTH = 299;
+const HEIGHT = 301;
 
 // Cell geometry in CSS pixels: 6px round cells on an 8px horizontal and 7px
 // vertical pitch, the same layout the page had when every cell was a button.
@@ -22,12 +22,26 @@ const RANDOM_DENSITY = 0.5;
 const SURVIVE = [2, 3];
 const BORN = [2, 3];
 
-// Cells that start alive, as [x, y] coordinates.
-const STARTING_CELLS = [
-    [48, 49], [49, 49],
-    [48, 50], [50, 50],
-    [48, 51], [49, 51],
-];
+// Cells that start alive: the six neighbours of the centre cell, which form a
+// small hexagon in the middle of the grid whatever its size.
+function startingCells() {
+    // Row nearest the vertical centre. When two rows tie (even HEIGHT), take
+    // the one whose half-cell shift puts a cell exactly on the horizontal
+    // centre: an even row when WIDTH is odd, an odd row when WIDTH is even.
+    let centerY = Math.floor(HEIGHT / 2);
+    if (HEIGHT % 2 === 0 && (WIDTH + centerY) % 2 === 0) {
+        centerY -= 1;
+    }
+    // Column whose centre is nearest the horizontal centre, allowing for the
+    // half-cell shift of odd rows.
+    const centerX = Math.round((WIDTH - 1 - (centerY % 2)) / 2);
+    const left = centerX - 1 + (centerY % 2);
+    return [
+        [centerX - 1, centerY], [centerX + 1, centerY],
+        [left, centerY - 1], [left + 1, centerY - 1],
+        [left, centerY + 1], [left + 1, centerY + 1],
+    ].filter(([x, y]) => inGrid(x, y));
+}
 
 const canvas = document.querySelector("#grid");
 const runButton = document.querySelector(".run");
@@ -47,11 +61,12 @@ function rowWidth(y) {
     return y % 2 === 0 ? WIDTH : WIDTH - 1;
 }
 
+function inGrid(x, y) {
+    return y >= 0 && y < HEIGHT && x >= 0 && x < rowWidth(y);
+}
+
 function isAlive(x, y) {
-    if (y < 0 || y >= HEIGHT || x < 0 || x >= rowWidth(y)) {
-        return 0;
-    }
-    return cells[y * WIDTH + x];
+    return inGrid(x, y) ? cells[y * WIDTH + x] : 0;
 }
 
 function liveNeighbors(x, y) {
@@ -183,7 +198,7 @@ function clearGrid() {
 // Restore the starting shape
 function resetGrid() {
     clearGrid();
-    STARTING_CELLS.forEach(([x, y]) => setCell(y * WIDTH + x, 1));
+    startingCells().forEach(([x, y]) => setCell(y * WIDTH + x, 1));
 }
 
 // Give every cell an independent chance of being alive
