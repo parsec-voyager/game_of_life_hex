@@ -1,134 +1,184 @@
-let nodes = document.querySelector("section").querySelectorAll("button");
-let buttons = document.querySelectorAll("button");
+// Grid size. Even rows hold WIDTH cells; odd rows hold one fewer and are
+// centred, which shifts them half a cell to the right and makes the grid
+// hexagonal: each cell touches two cells above, two below and one either side.
+const WIDTH = 99;
+const HEIGHT = 101;
 
-function run() {
-    nodes.forEach(node => {
+// Neighbour counts that keep a live cell alive, and that bring a dead cell to
+// life. Conway's original rules are SURVIVE = [2, 3] and BORN = [3]; this page
+// uses 2 or 3 for both because it creates interesting results.
+const SURVIVE = [2, 3];
+const BORN = [2, 3];
 
-        let location = node.getAttribute("data-coord");
-        let locationArray = location.split(',');
-        let locationNumberArray = [Number(locationArray[0]), Number(locationArray[1])]
-        let adjacent = [];
+// Cells that start alive, as [x, y] coordinates.
+const STARTING_CELLS = [
+    [48, 49], [49, 49],
+    [48, 50], [50, 50],
+    [48, 51], [49, 51],
+];
 
-        // Even
-        if (locationNumberArray[1] % 2 == 0) {
-            let evenArray = [
-                [1,0],
-                [0,1],
-                [-1,0],
-                [0,-1],
-                [-1,1],
-                [-1,-1],
-            ];
+const grid = document.querySelector("#grid");
+const runButton = document.querySelector(".run");
+const clearButton = document.querySelector(".clear");
+const stepButton = document.querySelector(".step");
+const resetButton = document.querySelector(".reset");
+const speedSlider = document.querySelector(".speed");
+const speedValue = document.querySelector(".speed-value");
 
-            evenArray.forEach(coord => {
-                if (document.querySelector('[data-coord="' + (locationNumberArray[0] + coord[0]).toString() + "," + (locationNumberArray[1] + coord[1]).toString() + '"]')) {
-                    adjacent.push((locationNumberArray[0] + coord[0]).toString() + "," + (locationNumberArray[1] + coord[1]).toString());
-                }
-            })
-        }
-        // Odd
-        else {
-            let oddArray = [
-                [1,0],
-                [0,1],
-                [-1,0],
-                [0,-1],
-                [1,-1],
-                [1,1]
-            ];
+// Cell state lives in flat arrays indexed by y * WIDTH + x, so a generation is
+// plain arithmetic with no DOM queries. Odd rows leave their last slot unused.
+let cells = new Uint8Array(WIDTH * HEIGHT);
+let next = new Uint8Array(WIDTH * HEIGHT);
+const elements = new Array(WIDTH * HEIGHT);
 
-            oddArray.forEach(coord => {
-                if (document.querySelector('[data-coord="' + (locationNumberArray[0] + coord[0]).toString() + "," + (locationNumberArray[1] + coord[1]).toString() + '"]')) {
-                    adjacent.push((locationNumberArray[0] + coord[0]).toString() + "," + (locationNumberArray[1] + coord[1]).toString());
-                }
-            })
-        }
-
-        let count = 0;
-        adjacent.forEach(neighbor => {
-            let neighborButton = document.querySelector('[data-coord="' + neighbor + '"]');
-            if (neighborButton.getAttribute("id")) {
-                count++;
-            }
-        })
-
-        // Alive
-        if (node.getAttribute("id")) {
-            if (count == 2 || count == 3) {
-                node.setAttribute("data-next", "born");
-            }
-        }
-        // Dead
-        else {
-            // Original game of life is (count == 2 || count == 3) when alive, (count == 3) when dead
-            if (count == 2 || count == 3) {
-                node.setAttribute("data-next", "born");
-            }
-        }
-    });
-
-    nodes.forEach(node => {
-        if (node.getAttribute("data-next")) {
-            node.setAttribute("id", "alive");
-            node.removeAttribute("data-next");
-        }
-        else {
-            node.removeAttribute("id");
-        }
-    });
+function rowWidth(y) {
+    return y % 2 === 0 ? WIDTH : WIDTH - 1;
 }
 
-// Toggle color of grid nodes
-nodes.forEach(node => {
-    function toggleColor() {
-        if (node.getAttribute("id")) {
-            node.removeAttribute("id");
-        }
-        else {
-            node.setAttribute("id", "alive");
+function isAlive(x, y) {
+    if (y < 0 || y >= HEIGHT || x < 0 || x >= rowWidth(y)) {
+        return 0;
+    }
+    return cells[y * WIDTH + x];
+}
+
+function liveNeighbors(x, y) {
+    // Odd rows are shifted right by half a cell, so their neighbours in the
+    // rows above and below are at x and x + 1 rather than x - 1 and x.
+    const left = x - 1 + (y % 2);
+    const right = left + 1;
+
+    return isAlive(x - 1, y) + isAlive(x + 1, y)
+        + isAlive(left, y - 1) + isAlive(right, y - 1)
+        + isAlive(left, y + 1) + isAlive(right, y + 1);
+}
+
+function setCell(index, alive) {
+    cells[index] = alive;
+    elements[index].classList.toggle("alive", alive === 1);
+}
+
+// Advance the whole grid by one iteration.
+function step() {
+    for (let y = 0; y < HEIGHT; y++) {
+        const width = rowWidth(y);
+        for (let x = 0; x < width; x++) {
+            const index = y * WIDTH + x;
+            const count = liveNeighbors(x, y);
+            const rule = cells[index] ? SURVIVE : BORN;
+            next[index] = rule.includes(count) ? 1 : 0;
         }
     }
 
-    node.addEventListener("click", toggleColor);
+    // Only touch the DOM for cells that actually changed.
+    for (let index = 0; index < cells.length; index++) {
+        if (next[index] !== cells[index]) {
+            elements[index].classList.toggle("alive", next[index] === 1);
+        }
+    }
+
+    [cells, next] = [next, cells];
+}
+
+// Build the grid of buttons once, in a fragment, so the page lays it out once.
+function buildGrid() {
+    const fragment = document.createDocumentFragment();
+
+    for (let y = 0; y < HEIGHT; y++) {
+        const row = document.createElement("section");
+        row.className = "row";
+
+        const width = rowWidth(y);
+        for (let x = 0; x < width; x++) {
+            const button = document.createElement("button");
+            button.dataset.coord = x + "," + y;
+            elements[y * WIDTH + x] = button;
+            row.appendChild(button);
+        }
+
+        fragment.appendChild(row);
+    }
+
+    grid.appendChild(fragment);
+}
+
+function clearGrid() {
+    for (let index = 0; index < cells.length; index++) {
+        if (cells[index]) {
+            setCell(index, 0);
+        }
+    }
+}
+
+// Restore the starting shape
+function resetGrid() {
+    clearGrid();
+    STARTING_CELLS.forEach(([x, y]) => setCell(y * WIDTH + x, 1));
+}
+
+buildGrid();
+resetGrid();
+
+// Toggle a node between dead and alive. One listener on the grid handles every
+// button instead of attaching ten thousand listeners.
+grid.addEventListener("click", event => {
+    const button = event.target.closest("button");
+    if (!button) {
+        return;
+    }
+    const [x, y] = button.dataset.coord.split(",").map(Number);
+    const index = y * WIDTH + x;
+    setCell(index, cells[index] ? 0 : 1);
 });
 
 // Clear the grid
-let clear = document.querySelector(".clear");
-let alives = document.querySelectorAll("#alive");
+clearButton.addEventListener("click", clearGrid);
 
-function clearNodes() {
-    alives.forEach(alive => {
-        alive.removeAttribute("id");
-    })
+// Run and pause the game. The slider sets iterations per second.
+let timer = null;
+
+function startRunning() {
+    timer = setInterval(step, 1000 / Number(speedSlider.value));
+    runButton.classList.add("alive");
 }
 
-clear.addEventListener("click", clearNodes);
+function stopRunning() {
+    clearInterval(timer);
+    timer = null;
+    runButton.classList.remove("alive");
+}
 
-// Toggle color of "Run" button
-let button = document.querySelector(".run");
-
-function toggle() {
-    if (button.getAttribute("id")) {
-        button.removeAttribute("id");
+runButton.addEventListener("click", () => {
+    if (timer === null) {
+        startRunning();
     }
     else {
-        button.setAttribute("id", "alive");
+        stopRunning();
     }
-}
+});
 
-button.addEventListener("click", toggle);
-
-// Run the game
-let game;
-function start() {
-    if (button.getAttribute("id")) {
-        game = setInterval(() => {
-            run();
-        }, 10000);
+// Advance a single iteration, pausing the game first if it is running
+stepButton.addEventListener("click", () => {
+    if (timer !== null) {
+        stopRunning();
     }
-    else {
-        clearInterval(game);
-    }
-}
+    step();
+});
 
-button.addEventListener("click", start);
+// Reset to the starting shape, pausing the game first if it is running
+resetButton.addEventListener("click", () => {
+    if (timer !== null) {
+        stopRunning();
+    }
+    resetGrid();
+});
+
+speedValue.textContent = speedSlider.value;
+
+speedSlider.addEventListener("input", () => {
+    speedValue.textContent = speedSlider.value;
+    if (timer !== null) {
+        stopRunning();
+        startRunning();
+    }
+});
