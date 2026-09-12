@@ -10,6 +10,9 @@ const HEIGHT = 101;
 const SURVIVE = [2, 3];
 const BORN = [2, 3];
 
+// Fraction of cells the Random button brings to life.
+const RANDOM_DENSITY = 0.5;
+
 // Cells that start alive, as [x, y] coordinates.
 const STARTING_CELLS = [
     [48, 49], [49, 49],
@@ -22,6 +25,7 @@ const runButton = document.querySelector(".run");
 const clearButton = document.querySelector(".clear");
 const stepButton = document.querySelector(".step");
 const resetButton = document.querySelector(".reset");
+const randomButton = document.querySelector(".random");
 const speedSlider = document.querySelector(".speed");
 const speedValue = document.querySelector(".speed-value");
 
@@ -116,6 +120,16 @@ function resetGrid() {
     STARTING_CELLS.forEach(([x, y]) => setCell(y * WIDTH + x, 1));
 }
 
+// Give every cell an independent chance of being alive
+function randomizeGrid() {
+    for (let y = 0; y < HEIGHT; y++) {
+        const width = rowWidth(y);
+        for (let x = 0; x < width; x++) {
+            setCell(y * WIDTH + x, Math.random() < RANDOM_DENSITY ? 1 : 0);
+        }
+    }
+}
+
 buildGrid();
 resetGrid();
 
@@ -167,6 +181,9 @@ stepButton.addEventListener("click", () => {
 
 // Reset to the starting shape. Like Clear, this leaves the game running.
 resetButton.addEventListener("click", resetGrid);
+
+// Fill the grid at random. This also leaves the game running.
+randomButton.addEventListener("click", randomizeGrid);
 
 speedValue.textContent = speedSlider.value;
 

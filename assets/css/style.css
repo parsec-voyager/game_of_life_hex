@@ -44,9 +44,11 @@ button {
     padding: 0px;
 }
 
-a, .run, .step, .clear, .reset {
+a, .run, .step, .clear, .reset, .random {
     color: white;
-    width: 48px;
+    width: auto;
+    min-width: 48px;
+    padding: 0 6px;
     height: 22px;
     border: 1px solid rgb(64, 64, 64);
     border-radius: 6px;
