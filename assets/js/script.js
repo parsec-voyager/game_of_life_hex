@@ -1,14 +1,22 @@
-// Grid size. Even rows hold WIDTH cells; odd rows hold one fewer and are
-// shifted right by half a cell, which makes the grid hexagonal: each cell
-// touches two cells above, two below and one either side.
-const WIDTH = 299;
-const HEIGHT = 301;
+// Board size. The board is a hexagon standing on a point: every cell at most
+// RADIUS steps from the centre cell. Its middle column is 2 * RADIUS + 1 cells
+// tall, and each column to the left or right is one cell shorter. Every second
+// column is shifted down by half a cell, so each cell touches one cell above,
+// one below, and two in each neighbouring column.
+const RADIUS = 149;
 
-// Cell geometry in CSS pixels: 6px round cells on an 8px horizontal and 7px
-// vertical pitch, the same layout the page had when every cell was a button.
+// Cells are stored in a square block that just contains the hexagon, with the
+// centre cell in the middle of it.
+const WIDTH = 2 * RADIUS + 1;
+const HEIGHT = 2 * RADIUS + 1;
+const CENTER_X = RADIUS;
+const CENTER_Y = RADIUS;
+
+// Cell geometry in CSS pixels: 6px round cells, 8px apart within a column and
+// with columns 7px apart, the button layout from before turned on its side.
 const CELL_SIZE = 6;
-const PITCH_X = 8;
-const PITCH_Y = 7;
+const PITCH_X = 7;
+const PITCH_Y = 8;
 const DEAD_COLOR = "black";
 const ALIVE_COLOR = "rgb(0, 255, 128)";
 const BORDER_COLOR = "rgb(64, 64, 64)";
@@ -23,23 +31,13 @@ const SURVIVE = [2, 3];
 const BORN = [2, 3];
 
 // Cells that start alive: the six neighbours of the centre cell, which form a
-// small hexagon in the middle of the grid whatever its size.
+// small hexagon at the exact centre of the board.
 function startingCells() {
-    // Row nearest the vertical centre. When two rows tie (even HEIGHT), take
-    // the one whose half-cell shift puts a cell exactly on the horizontal
-    // centre: an even row when WIDTH is odd, an odd row when WIDTH is even.
-    let centerY = Math.floor(HEIGHT / 2);
-    if (HEIGHT % 2 === 0 && (WIDTH + centerY) % 2 === 0) {
-        centerY -= 1;
-    }
-    // Column whose centre is nearest the horizontal centre, allowing for the
-    // half-cell shift of odd rows.
-    const centerX = Math.round((WIDTH - 1 - (centerY % 2)) / 2);
-    const left = centerX - 1 + (centerY % 2);
+    const top = CENTER_Y - 1 + (CENTER_X % 2);
     return [
-        [centerX - 1, centerY], [centerX + 1, centerY],
-        [left, centerY - 1], [left + 1, centerY - 1],
-        [left, centerY + 1], [left + 1, centerY + 1],
+        [CENTER_X, CENTER_Y - 1], [CENTER_X, CENTER_Y + 1],
+        [CENTER_X - 1, top], [CENTER_X - 1, top + 1],
+        [CENTER_X + 1, top], [CENTER_X + 1, top + 1],
     ].filter(([x, y]) => inGrid(x, y));
 }
 
@@ -53,16 +51,33 @@ const speedSlider = document.querySelector(".speed");
 const speedValue = document.querySelector(".speed-value");
 
 // Cell state lives in flat arrays indexed by y * WIDTH + x, so a generation is
-// plain arithmetic. Odd rows leave their last slot unused.
+// plain arithmetic. Slots outside the hexagon are never used.
 const cells = new Uint8Array(WIDTH * HEIGHT);
 const next = new Uint8Array(WIDTH * HEIGHT);
 
-function rowWidth(y) {
-    return y % 2 === 0 ? WIDTH : WIDTH - 1;
+// For each column, the first row on the board and the row just past its last.
+// Steps between cells are easiest to count in axial coordinates, where the
+// column stays the same and the row has the half-cell shift of every second
+// column taken out. Two cells are then as many steps apart as the largest of
+// the column change, the row change, and the two added together.
+const columnStart = new Int32Array(WIDTH);
+const columnEnd = new Int32Array(WIDTH);
+
+function axialRow(x, y) {
+    return y - (x - (x & 1)) / 2;
+}
+
+for (let x = 0; x < WIDTH; x++) {
+    const columnChange = x - CENTER_X;
+    const centerRow = axialRow(CENTER_X, CENTER_Y);
+    const firstRow = centerRow + Math.max(-RADIUS, -RADIUS - columnChange);
+    const lastRow = centerRow + Math.min(RADIUS, RADIUS - columnChange);
+    columnStart[x] = firstRow + (x - (x & 1)) / 2;
+    columnEnd[x] = lastRow + (x - (x & 1)) / 2 + 1;
 }
 
 function inGrid(x, y) {
-    return y >= 0 && y < HEIGHT && x >= 0 && x < rowWidth(y);
+    return x >= 0 && x < WIDTH && y >= columnStart[x] && y < columnEnd[x];
 }
 
 function isAlive(x, y) {
@@ -70,14 +85,14 @@ function isAlive(x, y) {
 }
 
 function liveNeighbors(x, y) {
-    // Odd rows are shifted right by half a cell, so their neighbours in the
-    // rows above and below are at x and x + 1 rather than x - 1 and x.
-    const left = x - 1 + (y % 2);
-    const right = left + 1;
+    // Odd columns are shifted down by half a cell, so their neighbours in the
+    // columns either side are at y and y + 1 rather than y - 1 and y.
+    const top = y - 1 + (x % 2);
+    const bottom = top + 1;
 
-    return isAlive(x - 1, y) + isAlive(x + 1, y)
-        + isAlive(left, y - 1) + isAlive(right, y - 1)
-        + isAlive(left, y + 1) + isAlive(right, y + 1);
+    return isAlive(x, y - 1) + isAlive(x, y + 1)
+        + isAlive(x - 1, top) + isAlive(x - 1, bottom)
+        + isAlive(x + 1, top) + isAlive(x + 1, bottom);
 }
 
 // Drawing. The grid is one canvas rather than one button per cell, so adding
@@ -91,9 +106,17 @@ canvas.style.height = HEIGHT * PITCH_Y + "px";
 const ctx = canvas.getContext("2d");
 ctx.scale(dpr, dpr);
 
-const CENTER_X = PITCH_X / 2;
-const CENTER_Y = PITCH_Y / 2;
-const RADIUS = CELL_SIZE / 2;
+const DOT_X = PITCH_X / 2;
+const DOT_Y = PITCH_Y / 2;
+const DOT_RADIUS = CELL_SIZE / 2;
+
+// How far a column is drawn from the top, in cells, compared with the centre
+// column. Columns of the other parity sit half a cell below it, or half a cell
+// above when the centre column is itself one of the shifted ones. Measuring
+// from the centre column keeps the hexagon centred on the canvas either way.
+function columnShift(x) {
+    return ((x & 1) - (CENTER_X & 1)) / 2;
+}
 
 // Draw one cell-sized tile with the given function, at screen resolution.
 function makeSprite(draw) {
@@ -111,11 +134,11 @@ function cellSprite(color) {
         c.fillStyle = DEAD_COLOR;
         c.fillRect(0, 0, PITCH_X, PITCH_Y);
         c.beginPath();
-        c.arc(CENTER_X, CENTER_Y, RADIUS, 0, 2 * Math.PI);
+        c.arc(DOT_X, DOT_Y, DOT_RADIUS, 0, 2 * Math.PI);
         c.fillStyle = color;
         c.fill();
         c.beginPath();
-        c.arc(CENTER_X, CENTER_Y, RADIUS - 0.25, 0, 2 * Math.PI);
+        c.arc(DOT_X, DOT_Y, DOT_RADIUS - 0.25, 0, 2 * Math.PI);
         c.lineWidth = 0.5;
         c.strokeStyle = BORDER_COLOR;
         c.stroke();
@@ -128,9 +151,9 @@ const aliveSprite = cellSprite(ALIVE_COLOR);
 // The white sheen a cell shows under the mouse, matching the button hover style.
 const hoverSprite = makeSprite(c => {
     c.beginPath();
-    c.arc(CENTER_X, CENTER_Y, RADIUS, 0, 2 * Math.PI);
+    c.arc(DOT_X, DOT_Y, DOT_RADIUS, 0, 2 * Math.PI);
     c.clip();
-    const gradient = c.createLinearGradient(0, CENTER_Y - RADIUS, 0, CENTER_Y + RADIUS);
+    const gradient = c.createLinearGradient(0, DOT_Y - DOT_RADIUS, 0, DOT_Y + DOT_RADIUS);
     gradient.addColorStop(0, "rgba(255, 255, 255, 0.75)");
     gradient.addColorStop(1, "rgba(255, 255, 255, 0.25)");
     c.fillStyle = gradient;
@@ -143,20 +166,20 @@ let hovered = -1;
 function drawCell(index) {
     const y = Math.floor(index / WIDTH);
     const x = index - y * WIDTH;
-    const px = x * PITCH_X + (y % 2) * (PITCH_X / 2);
-    const py = y * PITCH_Y;
+    const px = x * PITCH_X;
+    const py = (y + columnShift(x)) * PITCH_Y;
     ctx.drawImage(cells[index] ? aliveSprite : deadSprite, px, py, PITCH_X, PITCH_Y);
     if (index === hovered) {
         ctx.drawImage(hoverSprite, px, py, PITCH_X, PITCH_Y);
     }
 }
 
+// Draw every cell on the board. The corners of the canvas outside the hexagon
+// are left transparent.
 function drawGrid() {
-    ctx.fillStyle = DEAD_COLOR;
-    ctx.fillRect(0, 0, WIDTH * PITCH_X, HEIGHT * PITCH_Y);
-    for (let y = 0; y < HEIGHT; y++) {
-        const width = rowWidth(y);
-        for (let x = 0; x < width; x++) {
+    ctx.clearRect(0, 0, WIDTH * PITCH_X, HEIGHT * PITCH_Y);
+    for (let x = 0; x < WIDTH; x++) {
+        for (let y = columnStart[x]; y < columnEnd[x]; y++) {
             drawCell(y * WIDTH + x);
         }
     }
@@ -169,9 +192,8 @@ function setCell(index, alive) {
 
 // Advance the whole grid by one iteration.
 function step() {
-    for (let y = 0; y < HEIGHT; y++) {
-        const width = rowWidth(y);
-        for (let x = 0; x < width; x++) {
+    for (let x = 0; x < WIDTH; x++) {
+        for (let y = columnStart[x]; y < columnEnd[x]; y++) {
             const index = y * WIDTH + x;
             const count = liveNeighbors(x, y);
             const rule = cells[index] ? SURVIVE : BORN;
@@ -203,9 +225,8 @@ function resetGrid() {
 
 // Give every cell an independent chance of being alive
 function randomizeGrid() {
-    for (let y = 0; y < HEIGHT; y++) {
-        const width = rowWidth(y);
-        for (let x = 0; x < width; x++) {
+    for (let x = 0; x < WIDTH; x++) {
+        for (let y = columnStart[x]; y < columnEnd[x]; y++) {
             setCell(y * WIDTH + x, Math.random() < RANDOM_DENSITY ? 1 : 0);
         }
     }
@@ -214,20 +235,15 @@ function randomizeGrid() {
 drawGrid();
 resetGrid();
 
-// Map a mouse position to the index of the cell under it, or -1 for none.
+// Map a mouse position to the index of the cell under it, or -1 for none,
+// including anywhere in the corners outside the hexagon.
 function cellAt(event) {
     const rect = canvas.getBoundingClientRect();
     const px = (event.clientX - rect.left) * (WIDTH * PITCH_X / rect.width);
     const py = (event.clientY - rect.top) * (HEIGHT * PITCH_Y / rect.height);
-    const y = Math.floor(py / PITCH_Y);
-    if (y < 0 || y >= HEIGHT) {
-        return -1;
-    }
-    const x = Math.floor((px - (y % 2) * (PITCH_X / 2)) / PITCH_X);
-    if (x < 0 || x >= rowWidth(y)) {
-        return -1;
-    }
-    return y * WIDTH + x;
+    const x = Math.floor(px / PITCH_X);
+    const y = Math.floor(py / PITCH_Y - columnShift(x));
+    return inGrid(x, y) ? y * WIDTH + x : -1;
 }
 
 // Toggle a node between dead and alive
