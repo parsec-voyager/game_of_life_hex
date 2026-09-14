@@ -12,12 +12,18 @@ const HEIGHT = 2 * RADIUS + 1;
 const CENTER_X = RADIUS;
 const CENTER_Y = RADIUS;
 
-// Cell geometry in CSS pixels: 6px round cells, 8px apart within a column and
-// with columns 7px apart, the button layout from before turned on its side.
-const CELL_SIZE = 6;
-const PITCH_X = 7;
-const PITCH_Y = 8;
+// Cell geometry. The board is drawn as wide as the text above it, so the space
+// between cells is measured from the page when it loads, not fixed here.
+// Columns are 7/8 as far apart as cells within a column, which keeps every
+// cell the same distance from all six neighbours. Cells never grow past the
+// 7px column spacing they had as buttons.
+const MAX_PITCH_X = 7;
+const MIN_SCREEN_PITCH = 2;  // screen pixels
+const PITCH_RATIO = 7 / 8;
+const CELL_RATIO = 0.75;     // dot size, as a fraction of its tile
+const ROUND_MIN = 5;         // dots at least this many screen pixels across are drawn round
 const DEAD_COLOR = "black";
+const DIM_COLOR = "rgb(40, 40, 40)";
 const ALIVE_COLOR = "rgb(0, 255, 128)";
 const BORDER_COLOR = "rgb(64, 64, 64)";
 
@@ -41,6 +47,7 @@ function startingCells() {
     ].filter(([x, y]) => inGrid(x, y));
 }
 
+const container = document.querySelector("#grid-container");
 const canvas = document.querySelector("#grid");
 const runButton = document.querySelector(".run");
 const clearButton = document.querySelector(".clear");
@@ -95,70 +102,123 @@ function liveNeighbors(x, y) {
         + isAlive(x + 1, top) + isAlive(x + 1, bottom);
 }
 
-// Drawing. The grid is one canvas rather than one button per cell, so adding
+// Drawing. The board is one canvas rather than one button per cell, so adding
 // cells costs the browser almost nothing. Each cell is stamped from a small
 // pre-drawn image, and only cells that change are redrawn.
+//
+// The board is drawn exactly as wide as the text column. That width rarely
+// divides into a whole number of screen pixels per column, so the edges of the
+// columns, and of the cells within them, are each rounded to the nearest
+// screen pixel. Every cell is drawn the same size and stays crisp; the rounding
+// only makes some gaps between cells a pixel wider than others.
 const dpr = window.devicePixelRatio || 1;
-canvas.width = WIDTH * PITCH_X * dpr;
-canvas.height = HEIGHT * PITCH_Y * dpr;
-canvas.style.width = WIDTH * PITCH_X + "px";
-canvas.style.height = HEIGHT * PITCH_Y + "px";
 const ctx = canvas.getContext("2d");
-ctx.scale(dpr, dpr);
 
-const DOT_X = PITCH_X / 2;
-const DOT_Y = PITCH_Y / 2;
-const DOT_RADIUS = CELL_SIZE / 2;
+// Screen-pixel edges, filled in by layout(). columnEdge[x] is the left edge of
+// column x. halfEdge[h] is the top edge of the h-th half cell down the board,
+// since every second column is shifted down by half a cell.
+const columnEdge = new Int32Array(WIDTH + 1);
+const halfEdge = new Int32Array(2 * HEIGHT + 1);
 
-// How far a column is drawn from the top, in cells, compared with the centre
-// column. Columns of the other parity sit half a cell below it, or half a cell
-// above when the centre column is itself one of the shifted ones. Measuring
-// from the centre column keeps the hexagon centred on the canvas either way.
-function columnShift(x) {
-    return ((x & 1) - (CENTER_X & 1)) / 2;
+// Exact screen pixels per column and per cell within a column, and the size
+// of the tile each cell is stamped with. Also filled in by layout().
+let pitchX = 0;
+let pitchY = 0;
+let tileWidth = 0;
+let tileHeight = 0;
+let deadSprite = null;
+let aliveSprite = null;
+let hoverSprite = null;
+
+// How many half cells a column is shifted down, compared with the centre
+// column: one for columns of the other parity, or minus one when the centre
+// column is itself one of the shifted ones. Measuring from the centre column
+// keeps the hexagon centred on the canvas either way.
+function columnHalfShift(x) {
+    return (x & 1) - (CENTER_X & 1);
 }
 
-// Draw one cell-sized tile with the given function, at screen resolution.
+// The board width in screen pixels: the width of the text column, but never
+// so wide that cells grow past their original size, nor so narrow that a
+// column is less than MIN_SCREEN_PITCH pixels.
+function boardWidth() {
+    const column = Math.floor(container.getBoundingClientRect().width * dpr);
+    const largest = Math.floor(WIDTH * MAX_PITCH_X * dpr);
+    return Math.max(WIDTH * MIN_SCREEN_PITCH, Math.min(largest, column));
+}
+
+// Draw one tile-sized image with the given function.
 function makeSprite(draw) {
     const sprite = document.createElement("canvas");
-    sprite.width = PITCH_X * dpr;
-    sprite.height = PITCH_Y * dpr;
-    const c = sprite.getContext("2d");
-    c.scale(dpr, dpr);
-    draw(c);
+    sprite.width = tileWidth;
+    sprite.height = tileHeight;
+    draw(sprite.getContext("2d"));
     return sprite;
 }
 
-function cellSprite(color) {
+// Where the dot sits inside its tile, in screen pixels. A dot is drawn round
+// with a thin outline where there is room for one, and as a plain square below
+// that, since a circle a few pixels across is only a blur.
+function dotGeometry() {
+    const size = Math.max(1, Math.round(Math.min(tileWidth, tileHeight) * CELL_RATIO));
+    return {
+        size: size,
+        left: Math.floor((tileWidth - size) / 2),
+        top: Math.floor((tileHeight - size) / 2),
+        round: size >= ROUND_MIN,
+    };
+}
+
+// Trace the dot, either as a circle or as a square.
+function dotPath(c, dot) {
+    c.beginPath();
+    if (dot.round) {
+        c.arc(dot.left + dot.size / 2, dot.top + dot.size / 2, dot.size / 2, 0, 2 * Math.PI);
+    }
+    else {
+        c.rect(dot.left, dot.top, dot.size, dot.size);
+    }
+}
+
+function cellSprite(alive) {
+    const dot = dotGeometry();
+    // Round dead cells are black inside a grey outline. Square ones are too
+    // small for an outline, so they are a dim grey instead, which keeps the
+    // shape of the board visible when nothing is alive.
+    const fill = alive ? ALIVE_COLOR : (dot.round ? DEAD_COLOR : DIM_COLOR);
+
     return makeSprite(c => {
+        // An opaque tile, so stamping it fully replaces whatever was there.
         c.fillStyle = DEAD_COLOR;
-        c.fillRect(0, 0, PITCH_X, PITCH_Y);
-        c.beginPath();
-        c.arc(DOT_X, DOT_Y, DOT_RADIUS, 0, 2 * Math.PI);
-        c.fillStyle = color;
+        c.fillRect(0, 0, tileWidth, tileHeight);
+        dotPath(c, dot);
+        c.fillStyle = fill;
         c.fill();
-        c.beginPath();
-        c.arc(DOT_X, DOT_Y, DOT_RADIUS - 0.25, 0, 2 * Math.PI);
-        c.lineWidth = 0.5;
-        c.strokeStyle = BORDER_COLOR;
-        c.stroke();
+        if (dot.round) {
+            const lineWidth = Math.max(1, Math.round(dot.size / 12));
+            c.beginPath();
+            c.arc(dot.left + dot.size / 2, dot.top + dot.size / 2, dot.size / 2 - lineWidth / 2, 0, 2 * Math.PI);
+            c.lineWidth = lineWidth;
+            c.strokeStyle = BORDER_COLOR;
+            c.stroke();
+        }
     });
 }
 
-const deadSprite = cellSprite(DEAD_COLOR);
-const aliveSprite = cellSprite(ALIVE_COLOR);
-
 // The white sheen a cell shows under the mouse, matching the button hover style.
-const hoverSprite = makeSprite(c => {
-    c.beginPath();
-    c.arc(DOT_X, DOT_Y, DOT_RADIUS, 0, 2 * Math.PI);
-    c.clip();
-    const gradient = c.createLinearGradient(0, DOT_Y - DOT_RADIUS, 0, DOT_Y + DOT_RADIUS);
-    gradient.addColorStop(0, "rgba(255, 255, 255, 0.75)");
-    gradient.addColorStop(1, "rgba(255, 255, 255, 0.25)");
-    c.fillStyle = gradient;
-    c.fillRect(0, 0, PITCH_X, PITCH_Y);
-});
+function makeHoverSprite() {
+    const dot = dotGeometry();
+
+    return makeSprite(c => {
+        dotPath(c, dot);
+        c.clip();
+        const gradient = c.createLinearGradient(0, dot.top, 0, dot.top + dot.size);
+        gradient.addColorStop(0, "rgba(255, 255, 255, 0.75)");
+        gradient.addColorStop(1, "rgba(255, 255, 255, 0.25)");
+        c.fillStyle = gradient;
+        c.fillRect(0, 0, tileWidth, tileHeight);
+    });
+}
 
 // Index of the cell under the mouse, or -1.
 let hovered = -1;
@@ -166,23 +226,58 @@ let hovered = -1;
 function drawCell(index) {
     const y = Math.floor(index / WIDTH);
     const x = index - y * WIDTH;
-    const px = x * PITCH_X;
-    const py = (y + columnShift(x)) * PITCH_Y;
-    ctx.drawImage(cells[index] ? aliveSprite : deadSprite, px, py, PITCH_X, PITCH_Y);
+    const px = columnEdge[x];
+    const py = halfEdge[2 * y + columnHalfShift(x)];
+    ctx.drawImage(cells[index] ? aliveSprite : deadSprite, px, py);
     if (index === hovered) {
-        ctx.drawImage(hoverSprite, px, py, PITCH_X, PITCH_Y);
+        ctx.drawImage(hoverSprite, px, py);
     }
 }
 
-// Draw every cell on the board. The corners of the canvas outside the hexagon
-// are left transparent.
+// Draw every cell on the board. The corners of the canvas outside the hexagon,
+// and the gaps between tiles, are left transparent.
 function drawGrid() {
-    ctx.clearRect(0, 0, WIDTH * PITCH_X, HEIGHT * PITCH_Y);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     for (let x = 0; x < WIDTH; x++) {
         for (let y = columnStart[x]; y < columnEnd[x]; y++) {
             drawCell(y * WIDTH + x);
         }
     }
+}
+
+// Size the canvas to the text column, work out every edge and tile, and redraw.
+function layout() {
+    const width = boardWidth();
+    pitchX = width / WIDTH;
+    pitchY = pitchX / PITCH_RATIO;
+
+    for (let x = 0; x <= WIDTH; x++) {
+        columnEdge[x] = Math.round(x * pitchX);
+    }
+    for (let h = 0; h <= 2 * HEIGHT; h++) {
+        halfEdge[h] = Math.round(h * pitchY / 2);
+    }
+
+    // Tiles are as large as the narrowest column and shortest cell, so no two
+    // ever overlap.
+    tileWidth = Infinity;
+    for (let x = 0; x < WIDTH; x++) {
+        tileWidth = Math.min(tileWidth, columnEdge[x + 1] - columnEdge[x]);
+    }
+    tileHeight = Infinity;
+    for (let h = 0; h + 2 <= 2 * HEIGHT; h++) {
+        tileHeight = Math.min(tileHeight, halfEdge[h + 2] - halfEdge[h]);
+    }
+
+    canvas.width = columnEdge[WIDTH];
+    canvas.height = halfEdge[2 * HEIGHT];
+    canvas.style.width = canvas.width / dpr + "px";
+    canvas.style.height = canvas.height / dpr + "px";
+
+    deadSprite = cellSprite(false);
+    aliveSprite = cellSprite(true);
+    hoverSprite = makeHoverSprite();
+    drawGrid();
 }
 
 function setCell(index, alive) {
@@ -232,17 +327,55 @@ function randomizeGrid() {
     }
 }
 
-drawGrid();
+layout();
 resetGrid();
 
+// Follow the text column when the window is resized, at most once a frame.
+let layoutPending = false;
+
+window.addEventListener("resize", () => {
+    if (layoutPending) {
+        return;
+    }
+    layoutPending = true;
+    requestAnimationFrame(() => {
+        layoutPending = false;
+        if (boardWidth() !== canvas.width) {
+            layout();
+        }
+    });
+});
+
+// The index of the span containing position p, given the edges between spans
+// and their average width. The average gives a guess that is at most one span
+// out, which the edges then correct. Returns -1 outside every span.
+function spanAt(edges, count, averageWidth, p) {
+    if (p < 0 || p >= edges[count]) {
+        return -1;
+    }
+    let i = Math.min(count - 1, Math.floor(p / averageWidth));
+    while (i > 0 && edges[i] > p) {
+        i--;
+    }
+    while (i < count - 1 && edges[i + 1] <= p) {
+        i++;
+    }
+    return i;
+}
+
 // Map a mouse position to the index of the cell under it, or -1 for none,
-// including anywhere in the corners outside the hexagon.
+// including anywhere in the corners outside the hexagon. Every pixel of the
+// board belongs to a cell, gaps between tiles included.
 function cellAt(event) {
     const rect = canvas.getBoundingClientRect();
-    const px = (event.clientX - rect.left) * (WIDTH * PITCH_X / rect.width);
-    const py = (event.clientY - rect.top) * (HEIGHT * PITCH_Y / rect.height);
-    const x = Math.floor(px / PITCH_X);
-    const y = Math.floor(py / PITCH_Y - columnShift(x));
+    const px = (event.clientX - rect.left) * canvas.width / rect.width;
+    const py = (event.clientY - rect.top) * canvas.height / rect.height;
+    const x = spanAt(columnEdge, WIDTH, pitchX, px);
+    const h = spanAt(halfEdge, 2 * HEIGHT, pitchY / 2, py);
+    if (x < 0 || h < 0) {
+        return -1;
+    }
+    const y = Math.floor((h - columnHalfShift(x)) / 2);
     return inGrid(x, y) ? y * WIDTH + x : -1;
 }
 

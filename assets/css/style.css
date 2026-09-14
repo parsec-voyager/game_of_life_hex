@@ -23,12 +23,20 @@ h1 {
     margin-bottom: 0px;
 }
 
+/* The text and the grid share one column width, so the two always match. */
+p, #grid-container {
+    width: 50%;
+    margin-left: auto;
+    margin-right: auto;
+}
+
 p {
     color: rgba(255, 255, 255, 0.75);
     font-size: small;
-    width: 50%;
 }
 
+/* The grid is only narrower than the column when the board is small enough
+   that its cells hit their largest size. Centre it there. */
 #grid {
     display: block;
     margin: 0 auto;
